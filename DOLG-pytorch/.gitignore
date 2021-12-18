@@ -1,7 +1,6 @@
-Proxy-Anchor-CVPR2020/data/
-Proxy-Anchor-CVPR2020/logs/
-Proxy-Anchor-CVPR2020/wandb/
-*.pth
+# Data
+data
+lightning_logs
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

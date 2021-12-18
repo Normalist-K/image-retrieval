@@ -1,8 +1,3 @@
-Proxy-Anchor-CVPR2020/data/
-Proxy-Anchor-CVPR2020/logs/
-Proxy-Anchor-CVPR2020/wandb/
-*.pth
-
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
