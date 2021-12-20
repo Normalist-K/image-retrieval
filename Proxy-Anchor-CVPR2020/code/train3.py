@@ -114,6 +114,9 @@ parser.add_argument('--temperature', default=0.5, type=float,
 parser.add_argument('--loss-lambda', default=5, type=float,
     help = 'temperature scaling used in softmax cross-entropy loss'
 )
+parser.add_argument('--auxiliary-loss', default=1, type=int,
+    help = 'Auxiliary classification loss'
+)
 parser.add_argument('--remark', default = '',
     help = 'Any reamrk'
 )
@@ -190,8 +193,8 @@ nb_classes = trn_dataset.nb_classes()
 # Backbone Model
 if args.model == 'cgdolg3':
     model = CGDolgNet3(model_name=args.backbone_model, image_size=args.crop, gd_config=args.gd_config)
-elif args.model == 'cgdolg4':
-    model = CGDolgNet4(model_name=args.backbone_model, image_size=args.crop, gd_config=args.gd_config)
+elif args.model == 'cgdolg5':
+    model = CGDolgNet5(model_name=args.backbone_model, image_size=args.crop, gd_config=args.gd_config)
 # if args.model == 'dolg':
 #     model = DolgNet(model_name=args.backbone_model, image_size=args.crop)
 # elif args.model == 'cgdolg':
@@ -238,7 +241,7 @@ elif args.loss == 'Arcface':
 class_criterion = losses.LabelSmoothingCrossEntropyLoss(args.smoothing, args.temperature)
 
 # Train Parameters
-if args.model in ['dolg', 'cgdolg', 'cgdolg2', 'cgdolg3', 'cgdolg4']:
+if args.model in ['dolg', 'cgdolg', 'cgdolg2', 'cgdolg3', 'cgdolg5']:
     param_groups = [{'params': model.parameters() if args.gpu_id != -1 else model.module.parameters(), 'lr':float(args.lr) * 1},]
 else:
     param_groups = [
@@ -280,7 +283,7 @@ for epoch in range(0, args.nb_epochs):
     
     # Warmup: Train only new params, helps stabilize learning.
     if args.warm > 0:
-        if args.model in ['dolg', 'cgdolg', 'cgdolg2', 'cgdolg3']:
+        if args.model in ['dolg', 'cgdolg', 'cgdolg2', 'cgdolg3', 'cgdolg5']:
             if epoch == 0:
                 for param in list(model.model.parameters()):
                     param.requires_grad = False
@@ -289,9 +292,9 @@ for epoch in range(0, args.nb_epochs):
                     param.requires_grad = True
         else:
             if args.gpu_id != -1:
-                unfreeze_model_param = list(model.model.embedding.parameters()) + list(criterion.parameters())
+                unfreeze_model_param = list(model.model.embedding.parameters()) + list(metric_criterion.parameters())
             else:
-                unfreeze_model_param = list(model.module.model.embedding.parameters()) + list(criterion.parameters())
+                unfreeze_model_param = list(model.module.model.embedding.parameters()) + list(metric_criterion.parameters())
 
             if epoch == 0:
                 for param in list(set(model.parameters()).difference(set(unfreeze_model_param))):
@@ -305,8 +308,13 @@ for epoch in range(0, args.nb_epochs):
     for batch_idx, (x, y) in pbar:                         
         descriptor, classes = model(x.squeeze().cuda())
         metric_loss = metric_criterion(descriptor, y.squeeze().cuda())
-        class_loss = class_criterion(classes, y.squeeze().cuda())
-        loss = (metric_loss + (class_loss * args.loss_lambda)) / 2
+
+        if args.auxiliary_loss > epoch:       
+            class_loss = class_criterion(classes, y.squeeze().cuda())
+            loss = (metric_loss + (class_loss * args.loss_lambda))/2
+        else:
+            class_loss = torch.zeros(1)
+            loss = metric_loss
         
         opt.zero_grad()
         loss.backward()

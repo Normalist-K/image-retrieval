@@ -74,6 +74,43 @@ class CGD(nn.Module):
         global_descriptor = F.normalize(torch.cat(gds, dim=-1), dim=-1)
         return global_descriptor, classes
 
+class CGD3(nn.Module):
+    def __init__(self, gd_config='MG', feature_dim=1024, num_classes=200):
+        super(CGD3,self).__init__()
+
+        self.n = len(gd_config)
+
+        global_descriptors = []
+        main_modules = []
+
+        print(gd_config)
+
+        for gd in gd_config:
+            if gd == 'S':
+                p = 1
+            elif gd == 'M':
+                p = float('inf')
+            else:
+                p = 3
+            global_descriptors.append(GlobalDescriptor(p=p))
+            main_modules.append(nn.Sequential(nn.Linear(feature_dim, feature_dim)))
+        self.global_descriptors = nn.ModuleList(global_descriptors)
+        self.main_moduels = nn.ModuleList(main_modules)
+        self.auxiliary_module = nn.Sequential(
+            nn.BatchNorm1d(feature_dim),
+            nn.Linear(feature_dim, num_classes, bias=True))
+        
+
+    def forward(self, x):
+        gds = []
+        for i in range(self.n):
+            gd = self.global_descriptors[i](x)
+            gd = self.main_moduels[i](gd)
+            gds.append(gd)
+            if i == 0:
+                classes = self.auxiliary_module(gd)
+            
+        return gds, classes
 
 class CGD2(nn.Module):
     def __init__(self, gd_config='SG', feature_dim=1024):
@@ -180,6 +217,68 @@ class OrthogonalFusion(nn.Module):
         global_feat = global_feat.unsqueeze(-1).unsqueeze(-1)
         return torch.cat([global_feat.expand(orthogonal_comp.size()), orthogonal_comp], dim=1)
 
+
+
+class CGDolgNet5(nn.Module):
+    def __init__(self,
+                 model_name='resnet50', 
+                 pretrained=True, 
+                 input_dim=3, 
+                 hidden_dim=1024, 
+                 output_dim=512, 
+                 image_size=224,
+                 gd_config='MG'):
+        super().__init__()
+
+        if model_name == 'resnet101':
+            model_name = 'gluon_resnet101_v1b'
+
+        self.model = timm.create_model(
+            model_name,
+            pretrained=pretrained,
+            features_only=True,
+            in_chans=input_dim,
+            out_indices=(2, 3)
+        )
+        self.orthogonal_fusion = OrthogonalFusion()
+        self.local_branch = DolgLocalBranch(512, hidden_dim, 2048, image_size)
+        self.gap = nn.AdaptiveAvgPool2d(1)
+        self.cgd = CGD3(gd_config)
+        self.fc_1 = nn.Linear(1024, hidden_dim)
+        self.fc_2 = nn.Linear(int(2*hidden_dim), output_dim)
+        n = len(gd_config)
+        if n == 2:
+            ks = [output_dim//2, output_dim//2]
+        elif n == 3:
+            ks = [output_dim//3 + output_dim%3, output_dim//3, output_dim//3]
+        else:
+            ks = [output_dim]
+        self.fc_2_module = nn.ModuleList(
+            [nn.Sequential(
+                nn.Linear(int(2*hidden_dim), k), L2Norm()
+            ) for k in ks])
+        self.l2_norm = L2Norm()
+
+    def forward(self, x):
+        output = self.model(x)
+
+        local_feat = self.local_branch(output[0])  # ,hidden_channel,16,16
+        global_feats, classes = self.cgd(output[1])  # ,1024
+
+        feats = []
+        for i, global_feat in enumerate(global_feats):
+            feat = self.orthogonal_fusion(local_feat, global_feat)
+            feat = self.gap(feat).squeeze()
+            feat = self.fc_2_module[i](feat)
+            feats.append(feat)
+
+        feat = torch.cat(feats, dim=-1)
+        # feat = self.l2_norm(feat)
+
+        return feat, classes
+
+
+
 class CGDolgNet4(nn.Module):
     def __init__(self,
                  model_name='resnet50', 
@@ -204,7 +303,7 @@ class CGDolgNet4(nn.Module):
         self.orthogonal_fusion = OrthogonalFusion()
         self.local_branch = DolgLocalBranch(512, hidden_dim, 2048, image_size)
         self.gap = nn.AdaptiveAvgPool2d(1)
-        self.cgd = CGD(gd_config)
+        self.cgd = CGD(gd_config, feature_dim=2048)
         self.fc_1 = nn.Linear(2048, hidden_dim)
         self.fc_2 = nn.Linear(int(2*hidden_dim), output_dim)
 
